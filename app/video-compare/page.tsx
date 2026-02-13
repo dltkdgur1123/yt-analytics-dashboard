@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import VideoCompareChart, { type VideoMetricKey, type VideoCompareItem, METRIC_LABEL } from "../components/VideoCompareChart";
+import VideoCompareChart, { METRIC_LABEL, type VideoCompareItem, type VideoMetricKey } from "../components/VideoCompareChart";
 
 function yyyymmdd(d: Date) {
   const yyyy = d.getFullYear();
@@ -37,14 +37,15 @@ export default function VideoComparePage() {
 
   const [metric, setMetric] = useState<VideoMetricKey>("views");
 
-  // 입력/선택
   const [videoInput, setVideoInput] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
-  // 결과
   const [items, setItems] = useState<VideoCompareItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // 디버그용: 실제 응답 저장
+  const [debug, setDebug] = useState<any>(null);
 
   function applyInputIds() {
     const ids = videoInput
@@ -52,18 +53,12 @@ export default function VideoComparePage() {
       .map((v) => v.trim())
       .filter(Boolean);
 
-    // 중복 제거(키 중복 방지에도 도움)
-    const uniq = Array.from(new Set(ids));
-    setSelectedIds(uniq);
-  }
-
-  function toggleId(id: string) {
-    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    setSelectedIds(Array.from(new Set(ids)));
   }
 
   async function loadCompare() {
     if (!selectedIds.length) {
-      setErr("영상 ID를 1개 이상 선택/입력해주세요.");
+      setErr("영상 ID를 1개 이상 입력 후 [적용]을 눌러주세요.");
       return;
     }
 
@@ -82,19 +77,16 @@ export default function VideoComparePage() {
       const res = await fetch(`/api/youtube/video-compare?${qs.toString()}`, { cache: "no-store" });
       const json = await res.json();
 
+      setDebug(json);
+
       if (!res.ok || !json?.ok) {
         setItems([]);
         setErr(json?.raw?.error?.message ?? json?.error ?? `요청 실패 (${res.status})`);
         return;
       }
 
-      // 혹시라도 같은 videoId가 중복으로 오면 React key 경고가 뜰 수 있으니 여기서도 한 번 정리
       const rawItems: VideoCompareItem[] = Array.isArray(json.items) ? json.items : [];
-      const deduped = Array.from(
-        new Map(rawItems.map((it, idx) => [`${it?.videoId ?? ""}__${idx}`, it])).values()
-      );
-
-      setItems(deduped);
+      setItems(rawItems);
     } catch (e: any) {
       setErr(e?.message ?? "알 수 없는 오류");
     } finally {
@@ -114,21 +106,11 @@ export default function VideoComparePage() {
           <div className="flex flex-wrap items-center gap-2">
             <label className="flex items-center gap-2 text-sm">
               시작
-              <input
-                className="rounded border px-2 py-1"
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-              />
+              <input className="rounded border px-2 py-1" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
             </label>
             <label className="flex items-center gap-2 text-sm">
               종료
-              <input
-                className="rounded border px-2 py-1"
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-              />
+              <input className="rounded border px-2 py-1" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
             </label>
 
             <button
@@ -149,7 +131,7 @@ export default function VideoComparePage() {
                 value={videoInput}
                 onChange={(e) => setVideoInput(e.target.value)}
               />
-              <button onClick={applyInputIds} className="rounded bg-black px-4 py-2 text-sm font-medium text-white">
+              <button onClick={applyInputIds} className="rounded bg-black px-4 py-2 text-sm font-medium text-white" type="button">
                 적용
               </button>
             </div>
@@ -183,9 +165,9 @@ export default function VideoComparePage() {
           <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>
         ) : null}
 
-        {/* ✅ 차트 */}
+        {/* ✅ 차트 (여기서 무조건 렌더됨: items가 비어도 박스는 뜸) */}
         <div className="mt-6">
-          <VideoCompareChart items={items} metric={metric} onChangeMetric={setMetric} loading={loading} />
+          <VideoCompareChart items={items} metric={metric} loading={loading} />
         </div>
 
         {/* ✅ 테이블 */}
@@ -203,6 +185,7 @@ export default function VideoComparePage() {
                   <tr key={`${it.videoId || "noid"}-${idx}`} className="border-b">
                     <td className="p-2">
                       <div className="flex items-center gap-3">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
                         {it.thumbnailUrl ? <img src={it.thumbnailUrl} alt="" className="h-10 w-16 rounded object-cover" /> : null}
                         <div>
                           <div className="font-medium">{it.title}</div>
@@ -216,7 +199,7 @@ export default function VideoComparePage() {
               ) : (
                 <tr>
                   <td className="p-3 text-gray-500" colSpan={2}>
-                    아직 데이터 없음 (영상 ID 입력/선택 후 “비교 조회”)
+                    아직 데이터 없음 (영상 ID 입력 → “적용” → “비교 조회”)
                   </td>
                 </tr>
               )}
@@ -224,23 +207,11 @@ export default function VideoComparePage() {
           </table>
         </div>
 
-        {/* (선택) 간단 선택 토글 UI */}
-        {selectedIds.length ? (
-          <div className="mt-3 text-xs text-gray-600">
-            토글 제거:{" "}
-            {selectedIds.map((id, idx) => (
-              <button
-                key={`${id}-${idx}`}
-                className="mr-2 underline"
-                onClick={() => toggleId(id)}
-                title="클릭하면 선택 해제"
-                type="button"
-              >
-                {id}
-              </button>
-            ))}
-          </div>
-        ) : null}
+        {/* ✅ 디버그(지금 차트 안 뜰 때 원인 1초 컷) */}
+        <details className="mt-3 text-xs text-gray-600">
+          <summary className="cursor-pointer">디버그: /api/youtube/video-compare 응답 보기</summary>
+          <pre className="mt-2 max-h-[360px] overflow-auto rounded bg-gray-50 p-2">{JSON.stringify(debug, null, 2)}</pre>
+        </details>
       </section>
     </main>
   );

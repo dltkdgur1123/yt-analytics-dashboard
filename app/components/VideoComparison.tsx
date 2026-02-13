@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import VideoCompareChart from "./VideoCompareChart";
+import SimpleBarChart from "./SimpleBarChart";
+
 
 type MetricKey =
   | "views"
@@ -97,6 +98,7 @@ export default function VideoComparison() {
   }, [selected, videoList]);
 
   // ✅ 서버에서 받은 결과를 “차트/표”에서 쓰기 좋게 가공
+  
   const rows = useMemo(() => {
     if (!raw?.results) return [];
 
@@ -328,7 +330,7 @@ export default function VideoComparison() {
         ) : (
           <>
             <div className="mt-4">
-              <VideoCompareChart
+              <SimpleBarChart
                 title={METRIC_LABEL[metric]}
                 rows={rows.map((r) => ({ name: r.title, value: r.value ?? 0 }))}
               />

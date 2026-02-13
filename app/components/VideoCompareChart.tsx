@@ -23,7 +23,7 @@ export type VideoCompareItem = {
   publishedAt?: string;
   thumbnailUrl?: string;
 
-  // API가 내려주는 metric 필드들을 그대로 받는다고 가정 (숫자 or 문자열일 수 있음)
+  // API가 내려주는 metric 필드들 (숫자/문자열 가능)
   views?: number | string;
   estimatedMinutesWatched?: number | string;
   averageViewDuration?: number | string;
@@ -44,15 +44,14 @@ function formatNumber(n: number) {
 export default function VideoCompareChart(props: {
   items: VideoCompareItem[];
   metric: VideoMetricKey;
-  onChangeMetric: (m: VideoMetricKey) => void;
   loading: boolean;
 }) {
-  const { items, metric, onChangeMetric, loading } = props;
+  const { items, metric, loading } = props;
 
   const chartData = items.map((it, idx) => {
     const value = toNumber((it as any)[metric]);
     return {
-      key: `${it.videoId || "noid"}-${idx}`, // (참고) recharts는 key를 직접 안 쓰지만 디버깅용
+      key: `${it.videoId || "noid"}-${idx}`,
       name: it.title?.length > 18 ? `${it.title.slice(0, 18)}…` : it.title,
       fullTitle: it.title,
       value,
@@ -61,33 +60,12 @@ export default function VideoCompareChart(props: {
 
   return (
     <div className="rounded-xl border p-4">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <div className="flex items-center justify-between">
         <div>
           <div className="text-sm font-semibold">차트</div>
           <div className="text-xs text-gray-500">선택 지표: {METRIC_LABEL[metric]}</div>
         </div>
-
-        <div className="flex flex-wrap gap-2">
-          {(Object.keys(METRIC_LABEL) as VideoMetricKey[]).map((m) => {
-            const active = metric === m;
-            return (
-              <button
-                key={m}
-                type="button"
-                onClick={() => onChangeMetric(m)}
-                className={[
-                  "rounded-lg border px-3 py-1.5 text-xs font-medium transition",
-                  active ? "bg-black text-white" : "bg-white text-gray-700",
-                  loading ? "opacity-60" : "hover:bg-gray-50",
-                ].join(" ")}
-                disabled={loading}
-                aria-pressed={active}
-              >
-                {METRIC_LABEL[m]}
-              </button>
-            );
-          })}
-        </div>
+        {loading ? <div className="text-xs text-gray-500">불러오는 중...</div> : null}
       </div>
 
       <div className="mt-4 h-[360px] w-full">
@@ -104,6 +82,10 @@ export default function VideoCompareChart(props: {
           </BarChart>
         </ResponsiveContainer>
       </div>
+
+      {!loading && items.length === 0 ? (
+        <div className="mt-2 text-xs text-gray-500">표시할 데이터가 없어요. (로그인/영상ID/API 응답 확인)</div>
+      ) : null}
     </div>
   );
 }

@@ -10,55 +10,56 @@ function yyyy_mm_dd(d: Date) {
 }
 
 async function getMyChannelId(accessToken: string) {
-  const res = await fetch(
-    "https://www.googleapis.com/youtube/v3/channels?part=id&mine=true",
-    {
-      headers: { Authorization: `Bearer ${accessToken}` },
-      cache: "no-store",
-    }
-  );
-
-  const data = await res.json();
-  const channelId = data?.items?.[0]?.id as string | undefined;
-
-  return { ok: res.ok, status: res.status, channelId, raw: data };
+  const res = await fetch("https://www.googleapis.com/youtube/v3/channels?part=id&mine=true", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+  });
+  const raw = await res.json();
+  const channelId = raw?.items?.[0]?.id as string | undefined;
+  return { ok: res.ok, status: res.status, channelId, raw };
 }
 
-/**
- * GET /api/youtube/video-compare
- * Query:
- *  - startDate=YYYY-MM-DD
- *  - endDate=YYYY-MM-DD
- *  - metrics=views,estimatedMinutesWatched,...
- *  - videoIds=ID1,ID2,ID3
- */
+async function fetchVideoMeta(accessToken: string, ids: string[]) {
+  // YouTube Data API: videos.list
+  // 최대 50개까지 가능. (우린 몇 개만 비교할 거라 OK)
+  const api = new URL("https://www.googleapis.com/youtube/v3/videos");
+  api.searchParams.set("part", "snippet");
+  api.searchParams.set("id", ids.join(","));
+
+  const res = await fetch(api.toString(), {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+  });
+
+  const raw = await res.json();
+
+  const map = new Map<string, { title: string; thumbnailUrl?: string; publishedAt?: string }>();
+  for (const it of raw?.items ?? []) {
+    const id = it?.id as string | undefined;
+    const sn = it?.snippet;
+    if (!id || !sn) continue;
+
+    map.set(id, {
+      title: sn.title ?? id,
+      publishedAt: sn.publishedAt,
+      thumbnailUrl: sn.thumbnails?.medium?.url ?? sn.thumbnails?.default?.url,
+    });
+  }
+
+  return { ok: res.ok, status: res.status, raw, map };
+}
+
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
   const accessToken = (session as any)?.accessToken as string | undefined;
 
   if (!accessToken) {
-    return NextResponse.json({ ok: false, error: "no access token" }, { status: 401 });
-  }
-
-  // 1) 내 채널 ID
-  const ch = await getMyChannelId(accessToken);
-  if (!ch.channelId) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "채널 ID를 가져오지 못했습니다. 로그인 계정이 채널 소유자인지 확인하세요.",
-        channelLookup: ch,
-      },
-      { status: 400 }
-    );
+    return NextResponse.json({ ok: false, error: "로그인이 필요합니다.(no access token)" }, { status: 401 });
   }
 
   const url = new URL(req.url);
 
-  const end = url.searchParams.get("endDate")
-    ? new Date(url.searchParams.get("endDate")!)
-    : new Date();
-
+  const end = url.searchParams.get("endDate") ? new Date(url.searchParams.get("endDate")!) : new Date();
   const start = url.searchParams.get("startDate")
     ? new Date(url.searchParams.get("startDate")!)
     : new Date(Date.now() - 28 * 86400000);
@@ -70,6 +71,7 @@ export async function GET(req: Request) {
     url.searchParams.get("metrics") ??
     "views,estimatedMinutesWatched,averageViewDuration,subscribersGained,subscribersLost";
 
+  // videoIds: "a,b,c"
   const videoIdsRaw = url.searchParams.get("videoIds") ?? "";
   const videoIds = videoIdsRaw
     .split(",")
@@ -77,46 +79,89 @@ export async function GET(req: Request) {
     .filter(Boolean);
 
   if (videoIds.length === 0) {
+    return NextResponse.json({ ok: false, error: "videoIds가 비었습니다." }, { status: 400 });
+  }
+
+  // 1) 채널 ID
+  const ch = await getMyChannelId(accessToken);
+  if (!ch.channelId) {
     return NextResponse.json(
-      { ok: false, error: "videoIds 가 필요합니다. 예: videoIds=abc,def" },
+      { ok: false, error: "채널 ID를 가져오지 못했습니다.", raw: ch.raw },
       { status: 400 }
     );
   }
 
-  // 2) YouTube Analytics (dimensions=video 고정)
+  // 2) Analytics API (dimensions=video)
   const api = new URL("https://youtubeanalytics.googleapis.com/v2/reports");
   api.searchParams.set("ids", `channel==${ch.channelId}`);
   api.searchParams.set("startDate", startDate);
   api.searchParams.set("endDate", endDate);
   api.searchParams.set("metrics", metrics);
   api.searchParams.set("dimensions", "video");
-  api.searchParams.set("sort", `-${videoIds.length ? metrics.split(",")[0] : "views"}`); // 기본 sort
 
-  // 여러 영상 OR 필터: video==id1,id2,id3
+  // 핵심: 다중 video 필터
+  // YouTube Analytics에서 일반적으로 "video==id1,id2,id3" 형태를 사용
   api.searchParams.set("filters", `video==${videoIds.join(",")}`);
 
   const res = await fetch(api.toString(), {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: "application/json",
-    },
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
     cache: "no-store",
   });
 
-  const data = await res.json();
+  const raw = await res.json();
 
-  return NextResponse.json(
-    {
-      ok: res.ok,
-      status: res.status,
-      channelId: ch.channelId,
-      startDate,
-      endDate,
-      metrics,
-      videoIds,
-      requestUrl: api.toString(),
-      data,
-    },
-    { status: res.status }
-  );
+  if (!res.ok) {
+    return NextResponse.json(
+      {
+        ok: false,
+        status: res.status,
+        error: raw?.error?.message ?? "Analytics API 호출 실패",
+        requestUrl: api.toString(),
+        raw,
+      },
+      { status: res.status }
+    );
+  }
+
+  // 3) rows -> items로 변환
+  // raw.columnHeaders: [{name:"video",...},{name:"views",...}...]
+  const headers: string[] = (raw?.columnHeaders ?? []).map((h: any) => String(h?.name ?? ""));
+  const rows: any[] = raw?.rows ?? [];
+
+  // 비디오 메타(제목/썸네일)
+  const meta = await fetchVideoMeta(accessToken, videoIds);
+
+  const items = rows.map((r) => {
+    // r[0] = videoId, 이후는 metrics
+    const videoId = String(r?.[0] ?? "");
+    const m = meta.map.get(videoId);
+
+    const obj: any = {
+      videoId,
+      title: m?.title ?? videoId,
+      thumbnailUrl: m?.thumbnailUrl,
+      publishedAt: m?.publishedAt,
+    };
+
+    // headers 기준으로 metrics 매핑
+    // headers 예: ["video","views","estimatedMinutesWatched",...]
+    for (let i = 1; i < headers.length; i++) {
+      const key = headers[i];
+      obj[key] = r?.[i];
+    }
+
+    return obj;
+  });
+
+  return NextResponse.json({
+    ok: true,
+    status: 200,
+    requestUrl: api.toString(),
+    startDate,
+    endDate,
+    metrics,
+    items,
+    raw, // 디버그용
+    metaOk: meta.ok,
+  });
 }
