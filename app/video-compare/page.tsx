@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import VideoCompareChart, { type VideoMetricKey, type VideoCompareItem } from "../components/VideoCompareChart";
+import { useMemo, useState } from "react";
+import VideoCompareChart, { type VideoMetricKey, type VideoCompareItem, METRIC_LABEL } from "../components/VideoCompareChart";
 
 function yyyymmdd(d: Date) {
   const yyyy = d.getFullYear();
@@ -51,7 +51,10 @@ export default function VideoComparePage() {
       .split(",")
       .map((v) => v.trim())
       .filter(Boolean);
-    setSelectedIds(ids);
+
+    // 중복 제거(키 중복 방지에도 도움)
+    const uniq = Array.from(new Set(ids));
+    setSelectedIds(uniq);
   }
 
   function toggleId(id: string) {
@@ -85,17 +88,19 @@ export default function VideoComparePage() {
         return;
       }
 
-      setItems(json.items ?? []);
+      // 혹시라도 같은 videoId가 중복으로 오면 React key 경고가 뜰 수 있으니 여기서도 한 번 정리
+      const rawItems: VideoCompareItem[] = Array.isArray(json.items) ? json.items : [];
+      const deduped = Array.from(
+        new Map(rawItems.map((it, idx) => [`${it?.videoId ?? ""}__${idx}`, it])).values()
+      );
+
+      setItems(deduped);
     } catch (e: any) {
       setErr(e?.message ?? "알 수 없는 오류");
     } finally {
       setLoading(false);
     }
   }
-
-  useEffect(() => {
-    // 페이지 처음 들어오면 아무것도 안 불러오고 대기
-  }, []);
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-10">
@@ -109,11 +114,21 @@ export default function VideoComparePage() {
           <div className="flex flex-wrap items-center gap-2">
             <label className="flex items-center gap-2 text-sm">
               시작
-              <input className="rounded border px-2 py-1" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              <input
+                className="rounded border px-2 py-1"
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
             </label>
             <label className="flex items-center gap-2 text-sm">
               종료
-              <input className="rounded border px-2 py-1" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+              <input
+                className="rounded border px-2 py-1"
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
             </label>
 
             <button
@@ -179,13 +194,13 @@ export default function VideoComparePage() {
             <thead>
               <tr className="border-b">
                 <th className="p-2 text-left">영상</th>
-                <th className="p-2 text-right">{METRICS.find((m) => m.key === metric)?.label ?? metric}</th>
+                <th className="p-2 text-right">{METRIC_LABEL[metric] ?? metric}</th>
               </tr>
             </thead>
             <tbody>
               {items.length ? (
-                items.map((it) => (
-                  <tr key={it.videoId} className="border-b">
+                items.map((it, idx) => (
+                  <tr key={`${it.videoId || "noid"}-${idx}`} className="border-b">
                     <td className="p-2">
                       <div className="flex items-center gap-3">
                         {it.thumbnailUrl ? <img src={it.thumbnailUrl} alt="" className="h-10 w-16 rounded object-cover" /> : null}
@@ -209,16 +224,17 @@ export default function VideoComparePage() {
           </table>
         </div>
 
-        {/* (선택) 간단 선택 토글 UI: 입력값에서 토글 */}
+        {/* (선택) 간단 선택 토글 UI */}
         {selectedIds.length ? (
           <div className="mt-3 text-xs text-gray-600">
             토글 제거:{" "}
-            {selectedIds.map((id) => (
+            {selectedIds.map((id, idx) => (
               <button
-                key={id}
+                key={`${id}-${idx}`}
                 className="mr-2 underline"
                 onClick={() => toggleId(id)}
                 title="클릭하면 선택 해제"
+                type="button"
               >
                 {id}
               </button>

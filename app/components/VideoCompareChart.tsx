@@ -1,14 +1,6 @@
 "use client";
 
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 export type VideoMetricKey =
   | "views"
@@ -30,8 +22,19 @@ export type VideoCompareItem = {
   title: string;
   publishedAt?: string;
   thumbnailUrl?: string;
-  value: number; // 선택 metric 값
+
+  // API가 내려주는 metric 필드들을 그대로 받는다고 가정 (숫자 or 문자열일 수 있음)
+  views?: number | string;
+  estimatedMinutesWatched?: number | string;
+  averageViewDuration?: number | string;
+  subscribersGained?: number | string;
+  subscribersLost?: number | string;
 };
+
+function toNumber(v: unknown) {
+  const n = typeof v === "string" ? Number(v) : (v as number);
+  return Number.isFinite(n) ? n : 0;
+}
 
 function formatNumber(n: number) {
   if (!Number.isFinite(n)) return "-";
@@ -46,20 +49,22 @@ export default function VideoCompareChart(props: {
 }) {
   const { items, metric, onChangeMetric, loading } = props;
 
-  const chartData = items.map((it) => ({
-    name: it.title.length > 18 ? `${it.title.slice(0, 18)}…` : it.title,
-    fullTitle: it.title,
-    value: it.value,
-  }));
+  const chartData = items.map((it, idx) => {
+    const value = toNumber((it as any)[metric]);
+    return {
+      key: `${it.videoId || "noid"}-${idx}`, // (참고) recharts는 key를 직접 안 쓰지만 디버깅용
+      name: it.title?.length > 18 ? `${it.title.slice(0, 18)}…` : it.title,
+      fullTitle: it.title,
+      value,
+    };
+  });
 
   return (
     <div className="rounded-xl border p-4">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <div className="text-sm font-semibold">차트</div>
-          <div className="text-xs text-gray-500">
-            선택 지표: {METRIC_LABEL[metric]}
-          </div>
+          <div className="text-xs text-gray-500">선택 지표: {METRIC_LABEL[metric]}</div>
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -89,19 +94,11 @@ export default function VideoCompareChart(props: {
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={chartData} margin={{ top: 8, right: 12, left: 8, bottom: 64 }}>
             <CartesianGrid strokeDasharray="3 3" />
-            <XAxis
-              dataKey="name"
-              angle={-20}
-              textAnchor="end"
-              interval={0}
-              height={80}
-            />
+            <XAxis dataKey="name" angle={-20} textAnchor="end" interval={0} height={80} />
             <YAxis tickFormatter={(v) => formatNumber(Number(v))} />
             <Tooltip
               formatter={(v: any) => formatNumber(Number(v))}
-              labelFormatter={(_, payload) =>
-                payload?.[0]?.payload?.fullTitle ?? ""
-              }
+              labelFormatter={(_, payload) => payload?.[0]?.payload?.fullTitle ?? ""}
             />
             <Bar dataKey="value" />
           </BarChart>
