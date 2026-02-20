@@ -36,6 +36,7 @@ export async function GET(req: Request) {
   if (!res.ok) {
     return NextResponse.json(
       {
+        ok: false,
         error: "YouTube videos list failed",
         status: res.status,
         requestUrl: api.toString(),
@@ -45,12 +46,13 @@ export async function GET(req: Request) {
     );
   }
 
+  // ✅ 여기서 videoId로 통일해서 내려줌 (중요)
   const items =
     (data?.items ?? [])
       .map((it: any) => {
-        const id = it?.id?.videoId as string | undefined;
+        const videoId = it?.id?.videoId as string | undefined;
         const sn = it?.snippet;
-        if (!id || !sn) return null;
+        if (!videoId || !sn) return null;
 
         const thumb =
           sn?.thumbnails?.medium?.url ??
@@ -59,7 +61,7 @@ export async function GET(req: Request) {
           null;
 
         return {
-          id,
+          videoId,
           title: sn?.title ?? "(no title)",
           publishedAt: sn?.publishedAt ?? "",
           thumbnailUrl: thumb ?? undefined,

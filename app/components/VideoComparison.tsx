@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import SimpleBarChart from "./SimpleBarChart";
-
+import SimpleBarChart from "./SimpleBarChart"; // ✅ AnalyticsChart.tsx -> SimpleBarChart.tsx로 바꿨다고 했으니 이걸로 사용
 
 type MetricKey =
   | "views"
@@ -48,15 +47,11 @@ type VideoItem = {
   thumbnailUrl?: string;
 };
 
-// ✅ /api/youtube/videos 가 이미 있으면 그걸 쓰고,
-// 없으면 “직접 ID 입력 방식”만 써도 됨.
-// 여기서는 “있다고 가정 + 실패하면 입력 방식만 사용”으로 안전하게 처리.
 async function fetchVideoList(): Promise<VideoItem[]> {
   const res = await fetch("/api/youtube/videos", { cache: "no-store" });
   if (!res.ok) return [];
   const json = await res.json();
 
-  // 기대 형태 예시: { items: [{ id, title, ...}] }
   const items = (json?.items ?? []) as any[];
 
   return items
@@ -69,7 +64,7 @@ async function fetchVideoList(): Promise<VideoItem[]> {
         v.snippet?.thumbnails?.medium?.url ??
         v.snippet?.thumbnails?.default?.url,
     }))
-    .filter((v) => v.id && v.title);
+    .filter((v) => typeof v.id === "string" && v.id.trim().length > 0);
 }
 
 export default function VideoComparison() {
@@ -82,7 +77,7 @@ export default function VideoComparison() {
   const [videoInput, setVideoInput] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
 
-  const [videoList, setVideoList] = useState<VideoItem[]>([]);
+  const [videoListRaw, setVideoListRaw] = useState<VideoItem[]>([]);
   const [loadingList, setLoadingList] = useState(false);
 
   const [loading, setLoading] = useState(false);
@@ -91,18 +86,26 @@ export default function VideoComparison() {
   // server response
   const [raw, setRaw] = useState<any>(null);
 
+  // ✅ 1) 영상 목록 dedupe (id 기준) -> key 충돌 방지
+  const videoList = useMemo(() => {
+    const map = new Map<string, VideoItem>();
+    for (const v of videoListRaw) {
+      if (!v?.id) continue;
+      if (!map.has(v.id)) map.set(v.id, v);
+    }
+    return Array.from(map.values());
+  }, [videoListRaw]);
+
   // ✅ 선택된 영상의 표시용 정보
   const selectedInfo = useMemo(() => {
     const map = new Map(videoList.map((v) => [v.id, v]));
     return selected.map((id) => map.get(id) ?? { id, title: id });
   }, [selected, videoList]);
 
-  // ✅ 서버에서 받은 결과를 “차트/표”에서 쓰기 좋게 가공
-  
+  // ✅ 서버 결과 -> rows
   const rows = useMemo(() => {
     if (!raw?.results) return [];
 
-    // metrics 순서 파싱(서버에 보낸 문자열 순서대로 row가 옴)
     const metrics = String(raw?.metrics ?? DEFAULT_METRICS)
       .split(",")
       .map((s: string) => s.trim())
@@ -112,8 +115,11 @@ export default function VideoComparison() {
 
     return (raw.results as any[])
       .map((r) => {
-        const id = r.videoId as string;
-        const value = Array.isArray(r.row) && metricIndex >= 0 ? Number(r.row[metricIndex]) : null;
+        const id = String(r.videoId ?? "");
+        const value =
+          Array.isArray(r.row) && metricIndex >= 0
+            ? Number(r.row[metricIndex])
+            : null;
 
         const info = selectedInfo.find((v) => v.id === id);
         return {
@@ -124,16 +130,19 @@ export default function VideoComparison() {
           status: r.status,
         };
       })
-      .sort((a, b) => Number(b.value ?? -Infinity) - Number(a.value ?? -Infinity));
+      .filter((x) => x.videoId) // id 없는 건 제거
+      .sort(
+        (a, b) => Number(b.value ?? -Infinity) - Number(a.value ?? -Infinity)
+      );
   }, [raw, metric, selectedInfo]);
 
-  // ✅ 목록 불러오기(있으면 편하게 선택 / 없어도 수동 입력 가능)
+  // ✅ 목록 불러오기
   useEffect(() => {
     (async () => {
       setLoadingList(true);
       try {
         const list = await fetchVideoList();
-        setVideoList(list);
+        setVideoListRaw(list);
       } finally {
         setLoadingList(false);
       }
@@ -141,11 +150,13 @@ export default function VideoComparison() {
   }, []);
 
   function toggleSelect(id: string) {
+    const safeId = String(id ?? "").trim();
+    if (!safeId) return;
+
     setSelected((prev) => {
-      if (prev.includes(id)) return prev.filter((x) => x !== id);
-      // 너무 많아지면 느려지니까 기본 10개 정도 추천
+      if (prev.includes(safeId)) return prev.filter((x) => x !== safeId);
       if (prev.length >= 10) return prev;
-      return [...prev, id];
+      return [...prev, safeId];
     });
   }
 
@@ -154,7 +165,9 @@ export default function VideoComparison() {
       .split(",")
       .map((v) => v.trim())
       .filter(Boolean);
-    setSelected(Array.from(new Set(ids)).slice(0, 10));
+
+    const uniq = Array.from(new Set(ids)).slice(0, 10);
+    setSelected(uniq);
   }
 
   async function load() {
@@ -171,12 +184,15 @@ export default function VideoComparison() {
         videoIds: selected.join(","),
       });
 
-      const res = await fetch(`/api/youtube/video-stats?${qs.toString()}`, { cache: "no-store" });
+      const res = await fetch(`/api/youtube/video-stats?${qs.toString()}`, {
+        cache: "no-store",
+      });
       const json = await res.json();
       setRaw(json);
 
       if (!res.ok && json?.error) setErrMsg(String(json.error));
-      else if (json?.ok === false) setErrMsg("일부 영상 조회가 실패했어요(상태/권한/영상ID 확인).");
+      else if (json?.ok === false)
+        setErrMsg("일부 영상 조회가 실패했어요(상태/권한/영상ID 확인).");
     } catch (e: any) {
       setErrMsg(e?.message ?? "알 수 없는 오류");
     } finally {
@@ -188,7 +204,9 @@ export default function VideoComparison() {
     <section className="mt-10 rounded-xl border p-5">
       <div className="flex flex-col gap-1">
         <h2 className="text-xl font-bold">영상 레벨 멀티 비교</h2>
-        <p className="text-sm text-gray-600">여러 영상을 선택하고, 같은 기간/지표로 비교합니다.</p>
+        <p className="text-sm text-gray-600">
+          여러 영상을 선택하고, 같은 기간/지표로 비교합니다.
+        </p>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -221,7 +239,7 @@ export default function VideoComparison() {
         </button>
 
         <span className="text-xs text-gray-500">
-          선택: {selected.length}/10 (너무 많이 고르면 느려짐)
+          선택: {selected.length}/10
         </span>
       </div>
 
@@ -230,12 +248,14 @@ export default function VideoComparison() {
           const active = metric === k;
           return (
             <button
-              key={k}
+              key={k} // ✅ key OK
               type="button"
               onClick={() => setMetric(k)}
               className={[
                 "rounded-full border px-3 py-1 text-xs font-medium transition",
-                active ? "bg-black text-white" : "bg-white text-gray-700 hover:bg-gray-50",
+                active
+                  ? "bg-black text-white"
+                  : "bg-white text-gray-700 hover:bg-gray-50",
               ].join(" ")}
             >
               {METRIC_LABEL[k]}
@@ -250,7 +270,7 @@ export default function VideoComparison() {
         </div>
       ) : null}
 
-      {/* ✅ 수동 입력(영상 ID 직접 붙여넣기) */}
+      {/* ✅ 수동 입력 */}
       <div className="mt-6 rounded-lg border p-4">
         <div className="text-sm font-semibold">영상 ID 직접 입력</div>
         <div className="mt-2 flex gap-2">
@@ -260,13 +280,17 @@ export default function VideoComparison() {
             value={videoInput}
             onChange={(e) => setVideoInput(e.target.value)}
           />
-          <button onClick={applyManualIds} className="rounded bg-gray-900 px-4 py-2 text-sm text-white">
+          <button
+            onClick={applyManualIds}
+            className="rounded bg-gray-900 px-4 py-2 text-sm text-white"
+            type="button"
+          >
             적용
           </button>
         </div>
       </div>
 
-      {/* ✅ 영상 목록에서 고르기 (있을 때만) */}
+      {/* ✅ 영상 목록 */}
       <div className="mt-6 rounded-lg border p-4">
         <div className="flex items-center justify-between">
           <div className="text-sm font-semibold">비교할 영상 선택</div>
@@ -280,40 +304,58 @@ export default function VideoComparison() {
         </div>
 
         {loadingList ? (
-          <div className="mt-3 text-sm text-gray-500">영상 목록 불러오는 중...</div>
+          <div className="mt-3 text-sm text-gray-500">
+            영상 목록 불러오는 중...
+          </div>
         ) : videoList.length === 0 ? (
           <div className="mt-3 text-sm text-gray-500">
-            영상 목록 API(/api/youtube/videos)가 없거나 실패했어요. 위 “직접 입력”을 사용하면 됩니다.
+            영상 목록 API(/api/youtube/videos)가 없거나 실패했어요. 위 “직접 입력”을
+            사용하면 됩니다.
           </div>
         ) : (
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-            {videoList.slice(0, 30).map((v) => {
-              const isOn = selected.includes(v.id);
+            {videoList.slice(0, 30).map((v, idx) => {
+              const vid = v.id?.trim();
+              if (!vid) return null;
+
+              const isOn = selected.includes(vid);
+
               return (
-                // ✅ 여기 key가 핵심 (경고 해결)
                 <button
-                  key={v.id}
+                  key={vid} // ✅ 안정적인 고유 key (dedupe 했기 때문에 OK)
                   type="button"
-                  onClick={() => toggleSelect(v.id)}
+                  onClick={() => toggleSelect(vid)}
                   className={[
                     "flex items-center gap-3 rounded-xl border p-3 text-left transition",
-                    isOn ? "border-black bg-gray-50" : "bg-white hover:bg-gray-50",
+                    isOn
+                      ? "border-black bg-gray-50"
+                      : "bg-white hover:bg-gray-50",
                   ].join(" ")}
                 >
                   <div className="h-12 w-20 overflow-hidden rounded bg-gray-200">
                     {v.thumbnailUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={v.thumbnailUrl} alt="" className="h-full w-full object-cover" />
+                      <img
+                        src={v.thumbnailUrl}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
                     ) : null}
                   </div>
 
                   <div className="flex-1">
-                    <div className="line-clamp-1 text-sm font-medium">{v.title}</div>
-                    <div className="mt-1 text-[11px] text-gray-500">{v.publishedAt ?? "-"}</div>
-                    <div className="mt-1 text-[11px] text-gray-400">{v.id}</div>
+                    <div className="line-clamp-1 text-sm font-medium">
+                      {v.title}
+                    </div>
+                    <div className="mt-1 text-[11px] text-gray-500">
+                      {v.publishedAt ?? "-"}
+                    </div>
+                    <div className="mt-1 text-[11px] text-gray-400">{vid}</div>
                   </div>
 
-                  <div className="text-xs font-semibold">{isOn ? "선택됨" : "선택"}</div>
+                  <div className="text-xs font-semibold">
+                    {isOn ? "선택됨" : "선택"}
+                  </div>
                 </button>
               );
             })}
@@ -321,12 +363,14 @@ export default function VideoComparison() {
         )}
       </div>
 
-      {/* ✅ 결과: 차트 + 테이블 */}
+      {/* ✅ 결과 */}
       <div className="mt-6 rounded-lg border p-4">
         <div className="text-sm font-semibold">비교 결과</div>
 
         {rows.length === 0 ? (
-          <div className="mt-3 text-sm text-gray-500">아직 데이터 없음 (영상 선택 후 “비교 조회”)</div>
+          <div className="mt-3 text-sm text-gray-500">
+            아직 데이터 없음 (영상 선택 후 “비교 조회”)
+          </div>
         ) : (
           <>
             <div className="mt-4">
@@ -350,9 +394,13 @@ export default function VideoComparison() {
                     <tr key={r.videoId} className="border-b">
                       <td className="p-2">
                         <div className="font-medium">{r.title}</div>
-                        <div className="text-[11px] text-gray-400">{r.videoId}</div>
+                        <div className="text-[11px] text-gray-400">
+                          {r.videoId}
+                        </div>
                       </td>
-                      <td className="p-2 text-right font-semibold">{formatNumber(r.value)}</td>
+                      <td className="p-2 text-right font-semibold">
+                        {formatNumber(r.value)}
+                      </td>
                       <td className="p-2 text-right text-xs text-gray-500">
                         {r.ok ? "OK" : `FAIL(${r.status})`}
                       </td>
@@ -363,7 +411,9 @@ export default function VideoComparison() {
             </div>
 
             <details className="mt-3 text-xs text-gray-600">
-              <summary className="cursor-pointer">디버그: 원본 응답 보기</summary>
+              <summary className="cursor-pointer">
+                디버그: 원본 응답 보기
+              </summary>
               <pre className="mt-2 overflow-auto rounded bg-gray-50 p-2">
 {JSON.stringify(raw, null, 2)}
               </pre>
